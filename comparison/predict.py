@@ -46,9 +46,9 @@ def load_sentiment140():
     return sent140
 
 
-def load_mteb():
+def load_mteb(lang):
 
-    mteb = load_dataset("mteb/tweet_sentiment_multilingual", "english", split="test")
+    mteb = load_dataset("mteb/tweet_sentiment_multilingual", lang, split="test")
     mteb = mteb.rename_column("text", "sentence")
     mteb = mteb.cast_column(
         "label", ClassLabel(3, names=["negative", "neutral", "positive"])
@@ -57,11 +57,11 @@ def load_mteb():
     return mteb
 
 
-def load_amazon():
+def load_amazon(lang):
     """
     Load the Amazon Reviews dataset
     """
-    amazon = load_dataset("SetFit/amazon_reviews_multi_en", split="test")
+    amazon = load_dataset(f"SetFit/amazon_reviews_multi_{lang}", split="test")
 
     def convert_label(ex):
         if ex["label"] <= 1:
@@ -81,14 +81,20 @@ def load_amazon():
 
 
 benchmark_datasets = {
-    "sent_eval": load_sent_eval,
-    "sentiment140": load_sentiment140,
-    "mteb": load_mteb,
-    "amazon": load_amazon,
-    "sst2": lambda: load_dataset("stanfordnlp/sst2")["validation"],
-    "financial_phrasebank": lambda: load_dataset(
-        "takala/financial_phrasebank", "sentences_66agree"
-    )["train"],
+    "en": {
+        "sent_eval": load_sent_eval,
+        "sentiment140": load_sentiment140,
+        "mteb": lambda: load_mteb("english"),
+        "amazon": lambda: load_amazon("en"),
+        "sst2": lambda: load_dataset("stanfordnlp/sst2")["validation"],
+        "financial_phrasebank": lambda: load_dataset(
+            "takala/financial_phrasebank", "sentences_66agree"
+        )["train"],
+    },
+    "es": {
+        "mteb": lambda: load_mteb("spanish"),
+        "amazon": lambda: load_amazon("es"),
+    },
 }
 
 
@@ -220,11 +226,17 @@ class VaderAnalyzer:
         return [get_vader_sentiment(x) for x in outs]
 
 
+allowed_models = {
+    "en": ["vader", "textblob", "stanza", "tweetnlp", "pysentimiento"],
+    "es": ["stanza", "tweetnlp", "pysentimiento"],
+}
+
+
 def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--dataset", help="Dataset to evaluate", type=str, default=None)
-    parser.add_argument("--lang", type=str, default="en")
+    parser.add_argument("--lang", type=str, required=True, help="Language")
     parser.add_argument("--output", type=str, help="Output file", required=True)
     parser.add_argument(
         "--model",
@@ -243,10 +255,15 @@ def main():
         "pysentimiento": PySentimientoAnalyzer,
     }
 
+    lang = args.lang
+
     if args.dataset is None:
-        eval_datasets = list(benchmark_datasets.keys())
+        eval_datasets = list(benchmark_datasets[lang].keys())
     else:
         eval_datasets = [args.dataset]
+
+    if args.model not in allowed_models[lang]:
+        raise ValueError(f"Model {args.model} not available for language {lang}")
 
     analyzer = analyzers[args.model](args.lang)
 
@@ -256,7 +273,7 @@ def main():
 
     for ds_name in tqdm(eval_datasets):
         print(ds_name)
-        dataset = benchmark_datasets[ds_name]()
+        dataset = benchmark_datasets[lang][ds_name]()
         preds = analyzer(dataset)
 
         id2label = dataset.features["label"].names

@@ -2,7 +2,7 @@
 
 # Define the models
 models=("vader" "textblob" "stanza" "tweetnlp" "pysentimiento")
-langs=("en")
+langs=("es", "en")
 
 for lang in "${langs[@]}"
 do
@@ -14,6 +14,6 @@ do
         output_file="results/${lang}-sentiment-${model}.csv"
 
         # Run the python script with the current model and output file
-        python predict.py --model $model --output $output_file
+        python predict.py --model $model --output $output_file --lang $lang
     done
 done
