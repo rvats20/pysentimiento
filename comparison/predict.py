@@ -1,5 +1,6 @@
 import argparse
 import random
+import pandas as pd
 import tweetnlp
 import stanza
 import logging
@@ -8,6 +9,7 @@ from pysentimiento import create_analyzer
 from textblob import TextBlob
 from datasets import load_dataset, ClassLabel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from sklearn.metrics import classification_report
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -94,7 +96,7 @@ class PySentimientoAnalyzer:
     def __init__(self, lang):
         self.analyzer = create_analyzer("sentiment", lang=lang)
 
-    def predict(self, dataset):
+    def __call__(self, dataset):
         id2label = dataset.features["label"].names
 
         outs = self.analyzer.predict(dataset["sentence"])
@@ -109,11 +111,14 @@ class PySentimientoAnalyzer:
             translation = {"NEU": "neutral", "POS": "positive", "NEG": "negative"}
             return [translation[x.output] for x in outs]
 
+
 class StanzaAnalyzer:
     def __init__(self, lang):
-        self.nlp = stanza.Pipeline(lang=lang)
+        self.nlp = stanza.Pipeline(
+            lang=lang, processors="tokenize,sentiment", tokenize_no_ssplit=True
+        )
 
-    def predict(self, dataset):
+    def __call__(self, dataset):
         id2label = dataset.features["label"].names
         outs = self.nlp(dataset["sentence"])
 
@@ -133,86 +138,86 @@ class StanzaAnalyzer:
 
         return [_get_sentiment(x) for x in outs.sentences]
 
-def stanza_analyzer(dataset):
-    id2label = dataset.features["label"].names
-    outs = nlp(dataset["sentence"])
 
-    def _get_sentiment(x):
-        if x.sentiment == 0:
-            return "negative"
-        elif x.sentiment == 2:
-            return "positive"
-        elif len(id2label) == 2:
-            # Flip a coin
-            if random.random() > 0.5:
-                return "positive"
-            else:
-                return "negative"
-        else:
-            return "neutral"
+class TweetNLPAnalyzer:
+    def __init__(self, lang):
+        pass
 
-    return [_get_sentiment(x) for x in outs.sentences]
+    def __call__(self, dataset):
+        # Load here, this model has a memory leak
+        self.model = tweetnlp.load_model("sentiment")
+        id2label = dataset.features["label"].names
 
+        logger.info(f"Slow model -- running one by one")
+        # TweetNLP runs OOM if we run all at once
+        outs = [self.model.predict(ex["sentence"]) for ex in tqdm(dataset)]
 
-def tweetnlp_analyzer(dataset):
-    id2label = dataset.features["label"].names
-    outs = model.predict(dataset["sentence"])
+        del self.model
 
-    def get_tweetnlp_sentiment(x):
-        if x["label"] in {"positive", "negative"}:
-            return x["label"]
-        elif len(id2label) == 2:
-            # Flip a coin
-            if random.random() > 0.5:
-                return "positive"
-            else:
-                return "negative"
-        else:
-            return "neutral"
-
-    return [get_tweetnlp_sentiment(x) for x in outs]
-
-
-def textblob_analyzer(dataset, threshold=0.1):
-    id2label = dataset.features["label"].names
-    outs = [TextBlob(x).sentiment.polarity for x in dataset["sentence"]]
-
-    def get_textblob_sentiment(x):
-        if len(id2label) == 2:
-            if x > 0:
-                return "positive"
-            else:
-                return "negative"
-        else:
-            if x > threshold:
-                return "positive"
-            elif x < -threshold:
-                return "negative"
+        def get_tweetnlp_sentiment(x):
+            if x["label"] in {"positive", "negative"}:
+                return x["label"]
+            elif len(id2label) == 2:
+                # Flip a coin
+                if random.random() > 0.5:
+                    return "positive"
+                else:
+                    return "negative"
             else:
                 return "neutral"
 
-    return [get_textblob_sentiment(x) for x in outs]
+        return [get_tweetnlp_sentiment(x) for x in outs]
 
 
-def vader_analyzer(dataset):
-    id2label = dataset.features["label"].names
-    outs = [vader.polarity_scores(x) for x in dataset["sentence"]]
+class TextBlobAnalyzer:
+    def __init__(self, lang):
+        pass
 
-    def get_vader_sentiment(x):
-        if len(id2label) == 2:
-            if x["pos"] > x["neg"]:
-                return "positive"
+    def __call__(self, dataset):
+        id2label = dataset.features["label"].names
+        outs = [TextBlob(x).sentiment.polarity for x in dataset["sentence"]]
+
+        def get_textblob_sentiment(x):
+            if len(id2label) == 2:
+                if x > 0:
+                    return "positive"
+                else:
+                    return "negative"
             else:
-                return "negative"
-        else:
-            labels = ["neg", "neu", "pos"]
+                if x > 0.1:
+                    return "positive"
+                elif x < -0.1:
+                    return "negative"
+                else:
+                    return "neutral"
 
-            # get argmax
-            max_sent = max(range(len(labels)), key=lambda i: x[labels[i]])
+        return [get_textblob_sentiment(x) for x in outs]
 
-            return id2label[max_sent]
 
-    return [get_vader_sentiment(x) for x in outs]
+class VaderAnalyzer:
+    def __init__(self, lang):
+        pass
+
+    def __call__(self, dataset):
+        id2label = dataset.features["label"].names
+        vader = SentimentIntensityAnalyzer()
+        outs = [vader.polarity_scores(x) for x in dataset["sentence"]]
+
+        def get_vader_sentiment(x):
+            if len(id2label) == 2:
+                if x["pos"] > x["neg"]:
+                    return "positive"
+                else:
+                    return "negative"
+            else:
+                labels = ["neg", "neu", "pos"]
+
+                # get argmax
+                max_sent = max(range(len(labels)), key=lambda i: x[labels[i]])
+
+                return id2label[max_sent]
+
+        return [get_vader_sentiment(x) for x in outs]
 
 
 def main():
@@ -220,7 +225,7 @@ def main():
 
     parser.add_argument("--dataset", help="Dataset to evaluate", type=str, default=None)
     parser.add_argument("--lang", type=str, default="en")
-    parser.add_argument("--output", type=str)
+    parser.add_argument("--output", type=str, help="Output file", required=True)
     parser.add_argument(
         "--model",
         type=str,
@@ -230,7 +235,52 @@ def main():
     )
     args = parser.parse_args()
 
-    logger.info(f"Benchmarking {args.model} on {args.dataset}")
+    analyzers = {
+        "vader": VaderAnalyzer,
+        "textblob": TextBlobAnalyzer,
+        "stanza": StanzaAnalyzer,
+        "tweetnlp": TweetNLPAnalyzer,
+        "pysentimiento": PySentimientoAnalyzer,
+    }
+
+    if args.dataset is None:
+        eval_datasets = list(benchmark_datasets.keys())
+    else:
+        eval_datasets = [args.dataset]
+
+    analyzer = analyzers[args.model](args.lang)
+
+    logger.info(f"Benchmarking {args.model} on {eval_datasets}")
+
+    results = []
+
+    for ds_name in tqdm(eval_datasets):
+        print(ds_name)
+        dataset = benchmark_datasets[ds_name]()
+        preds = analyzer(dataset)
+
+        id2label = dataset.features["label"].names
+        label2id = {v: k for k, v in enumerate(id2label)}
+        true_labels = dataset["label"]
+        pred_labels = [label2id[x] for x in preds]
+
+        ret = classification_report(
+            true_labels, pred_labels, target_names=id2label, output_dict=True
+        )
+
+        res = {
+            "Model": args.model,
+            "Dataset": ds_name,
+            "Macro F1": ret["macro avg"]["f1-score"],
+            "Macro Precision": ret["macro avg"]["precision"],
+            "Macro Recall": ret["macro avg"]["recall"],
+        }
+
+        results.append(res)
+
+    logger.info(results)
+
+    pd.DataFrame(results).to_csv(args.output, index=False)
 
 
 if __name__ == "__main__":
