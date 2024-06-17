@@ -8,3 +8,13 @@ We compare `pysentimiento` with other opinion-mining toolkits, namely:
 - [TweetNLP](https://github.com/cardiffnlp/tweetnlp/)
 
 See the [comparison notebook](Results.ipynb)
+
+## Running experiments
+
+Run
+
+```bash
+./run_comparison.sh
+```
+
+to run the comparison experiments.

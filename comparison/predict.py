@@ -18,6 +18,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def load_hate_check(lang):
+    if lang == "en":
+        hatecheck = load_dataset("Paul/hatecheck")
+    elif lang == "es":
+        hatecheck = load_dataset("Paul/hatecheck-spanish")
+
+    hatecheck = hatecheck.rename_column("test_case", "sentence")
+
+    hatecheck = hatecheck.map(
+        lambda ex: {"label": 1 if ex["label_gold"] == "hateful" else 0}
+    )
+    hatecheck = hatecheck.cast_column("label", ClassLabel(2, names=["ok", "hateful"]))
+    return hatecheck["test"]
+
+
 def load_sent_eval():
     """
     Loads the SentEval-CR dataset
@@ -84,45 +99,60 @@ def load_amazon(lang):
 
 
 benchmark_datasets = {
-    "en": {
-        "sent_eval": load_sent_eval,
-        "sentiment140": load_sentiment140,
-        "mteb": lambda: load_mteb("english"),
-        "amazon": lambda: load_amazon("en"),
-        "sst2": lambda: load_dataset("stanfordnlp/sst2")["validation"],
-        "financial_phrasebank": lambda: load_dataset(
-            "takala/financial_phrasebank", "sentences_66agree"
-        )["train"],
+    "sentiment": {
+        "en": {
+            "sent_eval": load_sent_eval,
+            "sentiment140": load_sentiment140,
+            "mteb": lambda: load_mteb("english"),
+            "amazon": lambda: load_amazon("en"),
+            "sst2": lambda: load_dataset("stanfordnlp/sst2")["validation"],
+            "financial_phrasebank": lambda: load_dataset(
+                "takala/financial_phrasebank", "sentences_66agree"
+            )["train"],
+        },
+        "es": {
+            "mteb": lambda: load_mteb("spanish"),
+            "amazon": lambda: load_amazon("es"),
+        },
     },
-    "es": {
-        "mteb": lambda: load_mteb("spanish"),
-        "amazon": lambda: load_amazon("es"),
+    "hate_speech": {
+        "en": {
+            "hatecheck": lambda: load_hate_check("en"),
+        },
+        "es": {
+            "hatecheck": lambda: load_hate_check("es"),
+        },
     },
 }
 
 
 class PySentimientoAnalyzer:
-    def __init__(self, lang):
-        self.analyzer = create_analyzer("sentiment", lang=lang)
+    def __init__(self, lang, task):
+        self.task = task
+        self.analyzer = create_analyzer(task=task, lang=lang)
 
     def __call__(self, dataset):
         id2label = dataset.features["label"].names
-
         outs = self.analyzer.predict(dataset["sentence"])
 
-        if len(id2label) == 2:
-            # Only positive/negative
-            return [
-                "negative" if x.probas["NEG"] > x.probas["POS"] else "positive"
-                for x in outs
-            ]
-        else:
-            translation = {"NEU": "neutral", "POS": "positive", "NEG": "negative"}
-            return [translation[x.output] for x in outs]
+        if self.task == "sentiment":
+            if len(id2label) == 2:
+                # Only positive/negative
+                return [
+                    "negative" if x.probas["NEG"] > x.probas["POS"] else "positive"
+                    for x in outs
+                ]
+            else:
+                translation = {"NEU": "neutral", "POS": "positive", "NEG": "negative"}
+                return [translation[x.output] for x in outs]
+        elif self.task == "hate_speech":
+            return [id2label[int(o.probas["hateful"] > 0.5)] for o in outs]
 
 
 class StanzaAnalyzer:
-    def __init__(self, lang):
+    def __init__(self, lang, task):
+        if task != "sentiment":
+            raise ValueError("Stanza only supports sentiment analysis")
         self.nlp = stanza.Pipeline(
             lang=lang, processors="tokenize,sentiment", tokenize_no_ssplit=True
         )
@@ -149,38 +179,45 @@ class StanzaAnalyzer:
 
 
 class TweetNLPAnalyzer:
-    def __init__(self, lang):
-        pass
+    def __init__(self, lang, task):
+        identifier = {"sentiment": "sentiment", "hate_speech": "hate"}[task]
+        self.task = task
+        self.model = tweetnlp.load_model(identifier)
 
     def __call__(self, dataset):
         # Load here, this model has a memory leak
-        self.model = tweetnlp.load_model("sentiment")
+
         id2label = dataset.features["label"].names
 
-        logger.info(f"Slow model -- running one by one")
         # TweetNLP runs OOM if we run all at once
         outs = [self.model.predict(ex["sentence"]) for ex in tqdm(dataset)]
 
-        del self.model
+        if self.task == "sentiment":
 
-        def get_tweetnlp_sentiment(x):
-            if x["label"] in {"positive", "negative"}:
-                return x["label"]
-            elif len(id2label) == 2:
-                # Flip a coin
-                if random.random() > 0.5:
-                    return "positive"
+            def get_tweetnlp_sentiment(x):
+                if x["label"] in {"positive", "negative"}:
+                    return x["label"]
+                elif len(id2label) == 2:
+                    # Flip a coin
+                    if random.random() > 0.5:
+                        return "positive"
+                    else:
+                        return "negative"
                 else:
-                    return "negative"
-            else:
-                return "neutral"
+                    return "neutral"
 
-        return [get_tweetnlp_sentiment(x) for x in outs]
+            return [get_tweetnlp_sentiment(x) for x in outs]
+        elif self.task == "hate_speech":
+            translate = {"HATE": "hateful", "NOT-HATE": "ok"}
+            return [translate[x["label"]] for x in outs]
 
 
 class TextBlobAnalyzer:
-    def __init__(self, lang):
-        pass
+    def __init__(self, lang, task):
+        if lang != "en":
+            raise ValueError("TextBlob only supports English")
+        if task != "sentiment":
+            raise ValueError("TextBlob only supports sentiment analysis")
 
     def __call__(self, dataset):
         id2label = dataset.features["label"].names
@@ -204,8 +241,11 @@ class TextBlobAnalyzer:
 
 
 class VaderAnalyzer:
-    def __init__(self, lang):
-        pass
+    def __init__(self, lang, task):
+        if lang != "en":
+            raise ValueError("Vader only supports English")
+        if task != "sentiment":
+            raise ValueError("Vader only supports sentiment analysis")
 
     def __call__(self, dataset):
         id2label = dataset.features["label"].names
@@ -230,9 +270,12 @@ class VaderAnalyzer:
 
 
 class FlairAnalyzer:
-    def __init__(self, lang):
+    def __init__(self, lang, task):
         if lang != "en":
             raise ValueError("Flair only supports English")
+
+        if task != "sentiment":
+            raise ValueError("Flair only supports sentiment analysis")
         self.tagger = Classifier.load("sentiment")
 
     def __call__(self, dataset):
@@ -269,6 +312,7 @@ def main():
     parser.add_argument("--dataset", help="Dataset to evaluate", type=str, default=None)
     parser.add_argument("--lang", type=str, required=True, help="Language")
     parser.add_argument("--output", type=str, help="Output file", required=True)
+    parser.add_argument("--task", type=str, required=True, help="Task to evaluate")
     parser.add_argument(
         "--model",
         type=str,
@@ -277,6 +321,7 @@ def main():
     )
     args = parser.parse_args()
 
+    task = args.task
     analyzers = {
         "vader": VaderAnalyzer,
         "textblob": TextBlobAnalyzer,
@@ -289,14 +334,14 @@ def main():
     lang = args.lang
 
     if args.dataset is None:
-        eval_datasets = list(benchmark_datasets[lang].keys())
+        eval_datasets = list(benchmark_datasets[task][lang].keys())
     else:
         eval_datasets = [args.dataset]
 
     if args.model not in allowed_models[lang]:
         raise ValueError(f"Model {args.model} not available for language {lang}")
 
-    analyzer = analyzers[args.model](args.lang)
+    analyzer = analyzers[args.model](args.lang, task)
 
     logger.info(f"Benchmarking {args.model} on {eval_datasets}")
 
@@ -304,7 +349,7 @@ def main():
 
     for ds_name in tqdm(eval_datasets):
         print(ds_name)
-        dataset = benchmark_datasets[lang][ds_name]()
+        dataset = benchmark_datasets[task][lang][ds_name]()
         try:
             preds = analyzer(dataset)
 
