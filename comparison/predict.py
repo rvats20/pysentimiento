@@ -10,6 +10,9 @@ from textblob import TextBlob
 from datasets import load_dataset, ClassLabel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from sklearn.metrics import classification_report
+from flair.data import Sentence
+from flair.nn import Classifier
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -226,8 +229,36 @@ class VaderAnalyzer:
         return [get_vader_sentiment(x) for x in outs]
 
 
+class FlairAnalyzer:
+    def __init__(self, lang):
+        if lang != "en":
+            raise ValueError("Flair only supports English")
+        self.tagger = Classifier.load("sentiment")
+
+    def __call__(self, dataset):
+        id2label = dataset.features["label"].names
+
+        if len(id2label) > 2:
+            raise ValueError("Flair only supports binary classification")
+
+        sentences = [Sentence(x) for x in dataset["sentence"]]
+
+        self.tagger.predict(sentences)
+
+        def get_label(sent):
+            labels = sent.annotation_layers["label"]
+            # Get the one with highest value
+
+            annot = max(labels, key=lambda x: x._score)
+            return annot.value.lower()
+
+        outs = [get_label(x) for x in sentences]
+
+        return outs
+
+
 allowed_models = {
-    "en": ["vader", "textblob", "stanza", "tweetnlp", "pysentimiento"],
+    "en": ["vader", "textblob", "stanza", "tweetnlp", "pysentimiento", "flair"],
     "es": ["stanza", "tweetnlp", "pysentimiento"],
 }
 
@@ -243,7 +274,6 @@ def main():
         type=str,
         required=True,
         help="Model to evaluate",
-        choices=["vader", "textblob", "stanza", "tweetnlp", "pysentimiento"],
     )
     args = parser.parse_args()
 
@@ -253,6 +283,7 @@ def main():
         "stanza": StanzaAnalyzer,
         "tweetnlp": TweetNLPAnalyzer,
         "pysentimiento": PySentimientoAnalyzer,
+        "flair": FlairAnalyzer,
     }
 
     lang = args.lang
@@ -274,26 +305,29 @@ def main():
     for ds_name in tqdm(eval_datasets):
         print(ds_name)
         dataset = benchmark_datasets[lang][ds_name]()
-        preds = analyzer(dataset)
+        try:
+            preds = analyzer(dataset)
 
-        id2label = dataset.features["label"].names
-        label2id = {v: k for k, v in enumerate(id2label)}
-        true_labels = dataset["label"]
-        pred_labels = [label2id[x] for x in preds]
+            id2label = dataset.features["label"].names
+            label2id = {v: k for k, v in enumerate(id2label)}
+            true_labels = dataset["label"]
+            pred_labels = [label2id[x] for x in preds]
 
-        ret = classification_report(
-            true_labels, pred_labels, target_names=id2label, output_dict=True
-        )
+            ret = classification_report(
+                true_labels, pred_labels, target_names=id2label, output_dict=True
+            )
 
-        res = {
-            "Model": args.model,
-            "Dataset": ds_name,
-            "Macro F1": ret["macro avg"]["f1-score"],
-            "Macro Precision": ret["macro avg"]["precision"],
-            "Macro Recall": ret["macro avg"]["recall"],
-        }
+            res = {
+                "Model": args.model,
+                "Dataset": ds_name,
+                "Macro F1": ret["macro avg"]["f1-score"],
+                "Macro Precision": ret["macro avg"]["precision"],
+                "Macro Recall": ret["macro avg"]["recall"],
+            }
 
-        results.append(res)
+            results.append(res)
+        except ValueError as e:
+            logger.error(f"Error on {ds_name}: {e}")
 
     logger.info(results)
 
