@@ -23,6 +23,8 @@ def load_hate_check(lang):
         hatecheck = load_dataset("Paul/hatecheck")
     elif lang == "es":
         hatecheck = load_dataset("Paul/hatecheck-spanish")
+    elif lang == "it":
+        hatecheck = load_dataset("Paul/hatecheck-italian")
 
     hatecheck = hatecheck.rename_column("test_case", "sentence")
 
@@ -31,6 +33,17 @@ def load_hate_check(lang):
     )
     hatecheck = hatecheck.cast_column("label", ClassLabel(2, names=["ok", "hateful"]))
     return hatecheck["test"]
+
+
+def load_feel_it():
+    ds = load_dataset("pysentimiento/it_emotion")
+    id2label = ds["train"].features["label"].names
+
+    ds = ds.map(lambda ex: {"label": int(id2label[ex["label"]] == "joy")})
+    ds = ds.rename_column("text", "sentence")
+    ds = ds.cast_column("label", ClassLabel(2, names=["negative", "positive"]))
+
+    return ds["test"]
 
 
 def load_sent_eval():
@@ -114,6 +127,9 @@ benchmark_datasets = {
             "mteb": lambda: load_mteb("spanish"),
             "amazon": lambda: load_amazon("es"),
         },
+        "it": {
+            "feel_it": load_feel_it,
+        },
     },
     "hate_speech": {
         "en": {
@@ -121,6 +137,9 @@ benchmark_datasets = {
         },
         "es": {
             "hatecheck": lambda: load_hate_check("es"),
+        },
+        "it": {
+            "hatecheck": lambda: load_hate_check("it"),
         },
     },
 }
@@ -130,21 +149,32 @@ class PySentimientoAnalyzer:
     def __init__(self, lang, task):
         self.task = task
         self.analyzer = create_analyzer(task=task, lang=lang)
+        self.lang = lang
 
     def __call__(self, dataset):
         id2label = dataset.features["label"].names
         outs = self.analyzer.predict(dataset["sentence"])
 
         if self.task == "sentiment":
-            if len(id2label) == 2:
-                # Only positive/negative
+            if self.lang == "it":
                 return [
-                    "negative" if x.probas["NEG"] > x.probas["POS"] else "positive"
+                    "negative" if x.probas["neg"] > x.probas["pos"] else "positive"
                     for x in outs
                 ]
             else:
-                translation = {"NEU": "neutral", "POS": "positive", "NEG": "negative"}
-                return [translation[x.output] for x in outs]
+                if len(id2label) == 2:
+                    # Only positive/negative
+                    return [
+                        "negative" if x.probas["NEG"] > x.probas["POS"] else "positive"
+                        for x in outs
+                    ]
+                else:
+                    translation = {
+                        "NEU": "neutral",
+                        "POS": "positive",
+                        "NEG": "negative",
+                    }
+                    return [translation[x.output] for x in outs]
         elif self.task == "hate_speech":
             return [id2label[int(o.probas["hateful"] > 0.5)] for o in outs]
 
@@ -303,6 +333,7 @@ class FlairAnalyzer:
 allowed_models = {
     "en": ["vader", "textblob", "stanza", "tweetnlp", "pysentimiento", "flair"],
     "es": ["stanza", "tweetnlp", "pysentimiento"],
+    "it": ["pysentimiento", "tweetnlp", "stanza"],
 }
 
 

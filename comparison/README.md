@@ -9,6 +9,12 @@ We compare `pysentimiento` with other opinion-mining toolkits, namely:
 
 See the [comparison notebook](Results.ipynb)
 
+## Languages and datasets
+
+
+For Italian, datasets available at the [Huggingface hub](https://huggingface.co/datasets?language=language:it&sort=trending&search=senti) are mostly based on SentiPOLC, the dataset used to train the model. 
+
+
 ## Running experiments
 
 Run

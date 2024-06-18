@@ -2,8 +2,21 @@
 
 # Define the models
 models=("tweetnlp" "pysentimiento")
-langs=("en" "es")
-tasks=("sentiment" "hate_speech")
+
+# Check if not --lang is passed
+if [ -z "$1" ]
+then
+    langs=("en" "es" "it")
+else
+    langs=($1)
+fi
+
+if [ -z "$2" ]
+then
+    tasks=("sentiment" "hate_speech")
+else
+    tasks=($2)
+fi
 
 for task in "${tasks[@]}"
 do
