@@ -111,6 +111,7 @@ def load_amazon(lang):
     return amazon
 
 
+# Check if we should add https://huggingface.co/datasets/mteb/tweet_sentiment_extraction
 benchmark_datasets = {
     "sentiment": {
         "en": {
@@ -129,6 +130,7 @@ benchmark_datasets = {
         },
         "it": {
             "feel_it": load_feel_it,
+            "mteb": lambda: load_mteb("italian"),
         },
     },
     "hate_speech": {
@@ -334,6 +336,7 @@ allowed_models = {
     "en": ["vader", "textblob", "stanza", "tweetnlp", "pysentimiento", "flair"],
     "es": ["stanza", "tweetnlp", "pysentimiento"],
     "it": ["pysentimiento", "tweetnlp", "stanza"],
+    "pt": ["pysentimiento", "tweetnlp"],
 }
 
 
