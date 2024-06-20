@@ -132,6 +132,9 @@ benchmark_datasets = {
             "feel_it": load_feel_it,
             "mteb": lambda: load_mteb("italian"),
         },
+        "pt": {
+            "mteb": lambda: load_mteb("portuguese"),
+        },
     },
     "hate_speech": {
         "en": {
