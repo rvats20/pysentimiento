@@ -25,6 +25,8 @@ def load_hate_check(lang):
         hatecheck = load_dataset("Paul/hatecheck-spanish")
     elif lang == "it":
         hatecheck = load_dataset("Paul/hatecheck-italian")
+    elif lang == "pt":
+        hatecheck = load_dataset("Paul/hatecheck-portuguese")
 
     hatecheck = hatecheck.rename_column("test_case", "sentence")
 
@@ -146,6 +148,9 @@ benchmark_datasets = {
         "it": {
             "hatecheck": lambda: load_hate_check("it"),
         },
+        "pt": {
+            "hatecheck": lambda: load_hate_check("pt"),
+        },
     },
 }
 
@@ -181,7 +186,10 @@ class PySentimientoAnalyzer:
                     }
                     return [translation[x.output] for x in outs]
         elif self.task == "hate_speech":
-            return [id2label[int(o.probas["hateful"] > 0.5)] for o in outs]
+            if self.lang != "pt":
+                return [id2label[int(o.probas["hateful"] > 0.5)] for o in outs]
+            else:
+                return ["hateful" if len(o.output) > 0 else "ok" for o in outs]
 
 
 class StanzaAnalyzer:
